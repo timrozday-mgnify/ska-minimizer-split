@@ -42,5 +42,12 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64
+          # Emit a plain single-manifest Docker image, NOT an OCI image index with
+          # provenance/SBOM attestations. Singularity/Apptainer cannot convert the
+          # multi-manifest index and fails at mount time with
+          # "failed to mount squashfs filesystem: input/output error".
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
