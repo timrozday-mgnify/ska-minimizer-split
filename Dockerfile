@@ -10,5 +10,9 @@ RUN cargo build --release --locked
 FROM debian:bookworm-slim
 LABEL org.opencontainers.image.source=https://github.com/timrozday-mgnify/ska-minimizer-split
 LABEL org.opencontainers.image.description="ska-shard: split/concat ska2 .skf files by minimizer"
+# procps provides `ps`, which Nextflow needs to collect task metrics.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends procps \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/ska-shard /usr/local/bin/ska-shard
 CMD ["ska-shard", "--help"]
