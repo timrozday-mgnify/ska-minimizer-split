@@ -1,0 +1,25 @@
+[package]
+name = "ska-minimizer-split"
+version = "0.1.0"
+edition = "2021"
+description = "Split (shard) and concatenate ska2 .skf files by minimizer value to bound ska merge memory"
+license = "MIT"
+repository = "https://github.com/timrozday/ska-minimizer-split"
+
+[[bin]]
+name = "ska-shard"
+path = "src/bin/ska-shard.rs"
+
+[lib]
+name = "ska_minimizer_split"
+path = "src/lib.rs"
+
+[dependencies]
+# Pinned to match ska.rust so the on-disk .skf encoding is byte-compatible.
+ndarray = { version = "0.15", features = ["serde"] }
+ciborium = "0.2"
+snap = "1.1"
+serde = { version = "1", features = ["derive"] }
+nthash = "0.5"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
