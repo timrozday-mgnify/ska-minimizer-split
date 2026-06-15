@@ -1,6 +1,11 @@
-name: docker-publish
+name: publish
 
-# Build and push the ska-shard image to GHCR on version tags (v*) or manually.
+# Publish two artifacts to GHCR on version tags (v*) or manually:
+#   * a Docker image  ghcr.io/<repo>:<version>        (for docker/podman, nf-test)
+#   * a prebuilt SIF  oras://ghcr.io/<repo>:<version>-sif  (for Singularity/Apptainer)
+# Shipping a ready-made SIF means HPC nodes download and mount it directly with no
+# on-node OCI->SIF conversion, which avoids the squashfs/dev EIO failures that
+# conversion hits on some HPC filesystems.
 on:
   push:
     tags:
@@ -37,7 +42,7 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest
 
-      - name: Build and push
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -51,3 +56,31 @@ jobs:
           sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Resolve version
+        id: ver
+        run: |
+          REF="${{ github.ref_name }}"
+          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Apptainer
+        uses: eWaterCycle/setup-apptainer@v2
+
+      - name: Build SIF from the pushed image
+        env:
+          APPTAINER_DOCKER_USERNAME: ${{ github.actor }}
+          APPTAINER_DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          apptainer build ska-shard.sif \
+            "docker://${REGISTRY}/${IMAGE_NAME}:${{ steps.ver.outputs.version }}"
+
+      - name: Push SIF to GHCR via ORAS
+        run: |
+          apptainer registry login \
+            --username "${{ github.actor }}" \
+            --password "${{ secrets.GITHUB_TOKEN }}" \
+            "oras://${REGISTRY}"
+          apptainer push ska-shard.sif \
+            "oras://${REGISTRY}/${IMAGE_NAME}:${{ steps.ver.outputs.version }}-sif"
+          apptainer push ska-shard.sif \
+            "oras://${REGISTRY}/${IMAGE_NAME}:latest-sif"
