@@ -39,6 +39,20 @@ ska-shard concat merged_bin0.skf merged_bin1.skf ... -o merged.skf
 - Split is per-file; run it on each sample's `.skf` with the **same** `-n` and
   `-l` so corresponding bins are mergeable.
 
+## Container
+
+A prebuilt image is published to GHCR on each version tag:
+
+```bash
+docker pull ghcr.io/timrozday-mgnify/ska-minimizer-split:0.1.0
+docker run --rm ghcr.io/timrozday-mgnify/ska-minimizer-split:0.1.0 ska-shard --help
+```
+
+Build it locally with `docker build -t ghcr.io/timrozday-mgnify/ska-minimizer-split:0.1.0 .`.
+The [subspecies-phylogeny](https://github.com/timrozday-mgnify/subspecies-phylogeny)
+pipeline consumes this image in its `SKA2_SHARD_SPLIT` / `SKA2_SHARD_CONCAT`
+Nextflow modules.
+
 ## How it works
 
 - **SKF I/O** mirrors ska2's `MergeSkaArray` (snappy-framed CBOR via `ciborium`
