@@ -45,18 +45,18 @@ A prebuilt image is published to GHCR on each version tag:
 
 ```bash
 # Docker / Podman
-docker pull ghcr.io/timrozday-mgnify/ska-minimizer-split:0.1.0
-docker run --rm ghcr.io/timrozday-mgnify/ska-minimizer-split:0.1.0 ska-shard --help
+docker pull ghcr.io/timrozday-mgnify/ska-minimizer-split:0.1.1
+docker run --rm ghcr.io/timrozday-mgnify/ska-minimizer-split:0.1.1 ska-shard --help
 
 # Singularity / Apptainer — pull the prebuilt SIF (no on-node OCI->SIF conversion)
-singularity pull oras://ghcr.io/timrozday-mgnify/ska-minimizer-split:0.1.0-sif
+singularity pull oras://ghcr.io/timrozday-mgnify/ska-minimizer-split:0.1.1-sif
 ```
 
 The image is built on Alpine with a fully static (musl) binary, and a ready-made
 `.sif` is published via ORAS so HPC nodes download and mount it directly instead
 of converting the OCI image themselves.
 
-Build it locally with `docker build -t ghcr.io/timrozday-mgnify/ska-minimizer-split:0.1.0 .`.
+Build it locally with `docker build -t ghcr.io/timrozday-mgnify/ska-minimizer-split:0.1.1 .`.
 The [subspecies-phylogeny](https://github.com/timrozday-mgnify/subspecies-phylogeny)
 pipeline consumes this image in its `SKA2_SHARD_SPLIT` / `SKA2_SHARD_CONCAT`
 Nextflow modules.

@@ -6,6 +6,7 @@
 //!   3. `ska merge` bin i across all samples (parallel, ~1/n of the key space)
 //!   4. `ska-shard concat merged_bin*.skf -o merged.skf`
 
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, ensure, Context, Result};
@@ -132,40 +133,15 @@ fn run_split<IntT: SkfInt>(args: &SplitArgs) -> Result<()> {
 }
 
 fn run_concat<IntT: SkfInt>(args: &ConcatArgs) -> Result<()> {
-    let first: SkaArray<IntT> = SkaArray::load(&args.inputs[0])?;
-    let ncols = first.names.len();
+    // Load every bin. concat necessarily materialises the full merged matrix, so
+    // this is the same memory profile as stacking the bins one at a time.
+    let bins: Vec<SkaArray<IntT>> = args
+        .inputs
+        .iter()
+        .map(|p| SkaArray::load(p))
+        .collect::<Result<_>>()?;
 
-    let mut split_kmers: Vec<IntT> = first.split_kmers.clone();
-    let mut variant_count: Vec<usize> = first.variant_count.clone();
-    let mut variant_blocks: Vec<Array2<u8>> = vec![first.variants.clone()];
-
-    for path in &args.inputs[1..] {
-        let arr: SkaArray<IntT> = SkaArray::load(path)?;
-        check_compatible(&first, &arr, path)?;
-        split_kmers.extend(arr.split_kmers);
-        variant_count.extend(arr.variant_count);
-        variant_blocks.push(arr.variants);
-    }
-
-    // Vertically stack the per-bin middle-base blocks (columns already aligned
-    // by the identical sample ordering check above).
-    let views: Vec<_> = variant_blocks.iter().map(|a| a.view()).collect();
-    let variants = if views.is_empty() {
-        Array2::zeros((0, ncols))
-    } else {
-        concatenate(Axis(0), &views).context("stacking variant blocks")?
-    };
-
-    let merged = SkaArray::<IntT> {
-        k: first.k,
-        rc: first.rc,
-        names: first.names.clone(),
-        split_kmers,
-        variants,
-        variant_count,
-        ska_version: first.ska_version.clone(),
-        k_bits: first.k_bits,
-    };
+    let merged = concat_bins(&bins)?;
 
     println!(
         "concatenated {} bins -> {} ({} split k-mers, {} samples)",
@@ -178,27 +154,83 @@ fn run_concat<IntT: SkfInt>(args: &ConcatArgs) -> Result<()> {
     Ok(())
 }
 
-/// Reject inputs whose k / rc / k_bits / sample set or ordering differ, since
-/// concatenation aligns `variants` columns by position.
-fn check_compatible<IntT: SkfInt>(
-    a: &SkaArray<IntT>,
-    b: &SkaArray<IntT>,
-    b_path: &Path,
-) -> Result<()> {
-    if a.k != b.k || a.rc != b.rc || a.k_bits != b.k_bits {
-        bail!(
-            "{} has incompatible parameters (k/rc/k_bits) with the first input",
-            b_path.display()
-        );
+/// Concatenate per-bin SKFs into one, aligning sample columns by NAME.
+///
+/// The bins partition the split-kmer space, so their rows are simply stacked.
+/// Their `variants` columns, however, may be in different sample orders (each
+/// per-bin `ska merge` orders columns by its own input order) — so columns are
+/// realigned by sample name to a canonical (sorted-union) order, with any sample
+/// absent from a bin filled with the SKA missing byte `b'-'`. Only structural
+/// parameters (`k`/`rc`/`k_bits`) must match across bins.
+fn concat_bins<IntT: SkfInt>(bins: &[SkaArray<IntT>]) -> Result<SkaArray<IntT>> {
+    let first = &bins[0];
+
+    for (i, bin) in bins.iter().enumerate().skip(1) {
+        if bin.k != first.k || bin.rc != first.rc || bin.k_bits != first.k_bits {
+            bail!(
+                "bin {i} has incompatible parameters (k/rc/k_bits) with the first input"
+            );
+        }
     }
-    if a.names != b.names {
-        bail!(
-            "{} has a different sample set or ordering than the first input; \
-             all bins must come from the same ordered `ska merge` inputs",
-            b_path.display()
-        );
+
+    // Canonical sample order = sorted union of every bin's names. Deterministic, and
+    // tolerant of a bin missing a sample that had no k-mers in its minimizer range.
+    let canonical: Vec<String> = bins
+        .iter()
+        .flat_map(|b| b.names.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let ncols = canonical.len();
+    let canon_idx: HashMap<&str, usize> = canonical
+        .iter()
+        .enumerate()
+        .map(|(j, name)| (name.as_str(), j))
+        .collect();
+
+    // Remap each bin's variant columns into canonical positions by sample name,
+    // filling samples absent from a bin with the SKA missing byte b'-'.
+    let mut split_kmers: Vec<IntT> = Vec::new();
+    let mut variant_count: Vec<usize> = Vec::new();
+    let mut blocks: Vec<Array2<u8>> = Vec::with_capacity(bins.len());
+    let mut warned_missing = false;
+    for bin in bins {
+        if bin.names.len() != ncols && !warned_missing {
+            eprintln!(
+                "[ska-shard concat] note: bins have differing sample sets; \
+                 absent samples are filled with '-' (missing)"
+            );
+            warned_missing = true;
+        }
+        let mut block = Array2::from_elem((bin.n_kmers(), ncols), b'-');
+        for (c, name) in bin.names.iter().enumerate() {
+            let j = canon_idx[name.as_str()];
+            block.column_mut(j).assign(&bin.variants.column(c));
+        }
+        blocks.push(block);
+        // variant_count is per-k-mer (count of non-missing bases); reordering
+        // columns or adding all-missing columns leaves it unchanged.
+        split_kmers.extend(bin.split_kmers.iter().copied());
+        variant_count.extend(bin.variant_count.iter().copied());
     }
-    Ok(())
+
+    let views: Vec<_> = blocks.iter().map(|a| a.view()).collect();
+    let variants = if views.is_empty() {
+        Array2::zeros((0, ncols))
+    } else {
+        concatenate(Axis(0), &views).context("stacking variant blocks")?
+    };
+
+    Ok(SkaArray::<IntT> {
+        k: first.k,
+        rc: first.rc,
+        names: canonical,
+        split_kmers,
+        variants,
+        variant_count,
+        ska_version: first.ska_version.clone(),
+        k_bits: first.k_bits,
+    })
 }
 
 /// Default split output prefix = input file stem (strips the `.skf`).
@@ -207,4 +239,78 @@ fn default_prefix(input: &Path) -> String {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "shard".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::array;
+
+    /// Build a minimal u64 SkaArray bin from sample names and a row-major variant
+    /// matrix (rows = k-mers, cols = samples, in `names` order).
+    fn bin(names: &[&str], keys: &[u64], variants: Array2<u8>) -> SkaArray<u64> {
+        let variant_count = (0..variants.nrows())
+            .map(|r| variants.row(r).iter().filter(|&&b| b != b'-').count())
+            .collect();
+        SkaArray {
+            k: 31,
+            rc: true,
+            names: names.iter().map(|s| s.to_string()).collect(),
+            split_kmers: keys.to_vec(),
+            variants,
+            variant_count,
+            ska_version: "test".to_string(),
+            k_bits: 64,
+        }
+    }
+
+    #[test]
+    fn concat_realigns_columns_by_name() {
+        // Same samples, DIFFERENT column orders across the two bins.
+        let b0 = bin(&["A", "B", "C"], &[10, 11], array![[b'A', b'C', b'G'], [b'T', b'T', b'T']]);
+        let b1 = bin(&["C", "B", "A"], &[20], array![[b'G', b'C', b'A']]);
+
+        let merged = concat_bins(&[b0, b1]).unwrap();
+
+        // Canonical order is the sorted union: A, B, C.
+        assert_eq!(merged.names, vec!["A", "B", "C"]);
+        // Rows stacked; b1's columns realigned to [A, B, C].
+        assert_eq!(
+            merged.variants,
+            array![
+                [b'A', b'C', b'G'], // b0 row 0
+                [b'T', b'T', b'T'], // b0 row 1
+                [b'A', b'C', b'G'], // b1 row 0, realigned C,B,A -> A,B,C
+            ]
+        );
+        assert_eq!(merged.split_kmers, vec![10, 11, 20]);
+    }
+
+    #[test]
+    fn concat_fills_absent_sample_with_missing() {
+        // Second bin is missing sample C entirely.
+        let b0 = bin(&["A", "B", "C"], &[10], array![[b'A', b'C', b'G']]);
+        let b1 = bin(&["B", "A"], &[20], array![[b'T', b'A']]);
+
+        let merged = concat_bins(&[b0, b1]).unwrap();
+
+        assert_eq!(merged.names, vec!["A", "B", "C"]);
+        assert_eq!(
+            merged.variants,
+            array![
+                [b'A', b'C', b'G'],  // b0
+                [b'A', b'T', b'-'],  // b1: A,B realigned; C absent -> '-'
+            ]
+        );
+        // variant_count is unchanged per row (missing fill adds no non-missing base).
+        assert_eq!(merged.variant_count, vec![3, 2]);
+    }
+
+    #[test]
+    fn concat_rejects_incompatible_k() {
+        let mut b1 = bin(&["A"], &[20], array![[b'A']]);
+        b1.k = 21;
+        let b0 = bin(&["A"], &[10], array![[b'A']]);
+        assert!(concat_bins(&[b0, b1]).is_err());
+    }
 }
