@@ -1,14 +1,15 @@
-//! Minimizer-based bin assignment for split k-mers.
+//! Bin assignment for split k-mers by hashing their full flank.
 //!
 //! A SKA split-kmer key encodes the `(k-1)` flanking bases (the variable middle
 //! base lives in the `variants` array, not the key). We decode those flanks back
-//! to ACGT, take the canonical ntHash minimizer of the `l`-mer windows, and map
-//! it to a bin. Because the key is canonical and the same in every sample, this
-//! assignment is deterministic per biological split k-mer — the property that
-//! makes "shard → merge each bin → concatenate" equivalent to a direct merge.
+//! to ACGT and take the canonical ntHash of the **entire** flank sequence, then
+//! map the hash to a bin. Because the key is canonical and the same in every
+//! sample, this assignment is deterministic per biological split k-mer — the
+//! property that makes "shard → merge each bin → concatenate" equivalent to a
+//! direct merge.
 //!
 //! The decode mirrors ska.rust `src/ska_dict/bit_encoding.rs::decode_kmer`; the
-//! ntHash scheme mirrors rust-mdbg's use of canonical `ntc64`.
+//! hash uses the canonical ntHash scheme from the `nthash` crate.
 
 use anyhow::{ensure, Result};
 use nthash::NtHashIterator;
@@ -41,20 +42,17 @@ pub fn decode_flank(key: u128, k: usize) -> Vec<u8> {
     flank
 }
 
-/// Assign a flank sequence to one of `n` bins via its canonical ntHash minimizer.
+/// Assign a flank sequence to one of `n` bins via the canonical ntHash of the full flank.
 ///
-/// `l` is the minimizer (l-mer) length and must satisfy `l <= flank.len()`.
-pub fn minimizer_bin(flank: &[u8], l: usize, n: usize) -> Result<usize> {
+/// Hashing the entire `(k-1)` flank (rather than taking a minimizer over shorter
+/// windows) eliminates a length parameter and gives better hash entropy.
+pub fn flank_bin(flank: &[u8], n: usize) -> Result<usize> {
     ensure!(n >= 1, "number of bins must be >= 1");
-    ensure!(
-        l >= 1 && l <= flank.len(),
-        "minimizer length {l} must be in 1..={}",
-        flank.len()
-    );
-    let iter = NtHashIterator::new(flank, l)
+    ensure!(!flank.is_empty(), "flank must be non-empty");
+    let mut iter = NtHashIterator::new(flank, flank.len())
         .map_err(|e| anyhow::anyhow!("ntHash init failed: {e}"))?;
-    let min_hash = iter.min().expect("at least one l-mer window");
-    Ok((min_hash % n as u64) as usize)
+    let hash = iter.next().expect("full-flank window always exists");
+    Ok((hash % n as u64) as usize)
 }
 
 #[cfg(test)]
@@ -96,14 +94,9 @@ mod tests {
     fn bin_is_deterministic_and_in_range() {
         let flank = b"ACGTACGTACGTACGGTCAGTCAGTCAGTC";
         let n = 7;
-        let a = minimizer_bin(flank, 9, n).unwrap();
-        let b = minimizer_bin(flank, 9, n).unwrap();
+        let a = flank_bin(flank, n).unwrap();
+        let b = flank_bin(flank, n).unwrap();
         assert_eq!(a, b);
         assert!(a < n);
-    }
-
-    #[test]
-    fn rejects_oversized_minimizer() {
-        assert!(minimizer_bin(b"ACGT", 5, 4).is_err());
     }
 }

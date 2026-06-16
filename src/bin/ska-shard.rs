@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand};
 use ndarray::{concatenate, Array2, Axis};
 
 use ska_minimizer_split::dispatch_skf_width;
-use ska_minimizer_split::minimizer::{decode_flank, minimizer_bin};
+use ska_minimizer_split::minimizer::{decode_flank, flank_bin};
 use ska_minimizer_split::skf::{SkaArray, SkfInt};
 
 #[derive(Parser)]
@@ -43,9 +43,6 @@ struct SplitArgs {
     /// Number of bins to split into.
     #[arg(short = 'n', long = "bins")]
     bins: usize,
-    /// Minimizer (l-mer) length; must be <= k-1.
-    #[arg(short = 'l', long = "minimizer-len", default_value_t = 9)]
-    minimizer_len: usize,
     /// Output prefix; bins are written as <prefix>.<i>.skf. Defaults to the
     /// input file stem.
     #[arg(short = 'o', long = "out-prefix")]
@@ -78,14 +75,6 @@ fn run_split<IntT: SkfInt>(args: &SplitArgs) -> Result<()> {
     ensure!(args.bins >= 1, "--bins must be >= 1");
     let arr: SkaArray<IntT> = SkaArray::load(&args.input)?;
     let k = arr.k;
-    let flank_len = k - 1;
-    ensure!(
-        args.minimizer_len <= flank_len,
-        "--minimizer-len {} exceeds k-1 = {} for this skf (k={})",
-        args.minimizer_len,
-        flank_len,
-        k
-    );
 
     let ncols = arr.names.len();
     let n = args.bins;
@@ -97,7 +86,7 @@ fn run_split<IntT: SkfInt>(args: &SplitArgs) -> Result<()> {
 
     for i in 0..arr.n_kmers() {
         let flank = decode_flank(arr.split_kmers[i].into(), k);
-        let b = minimizer_bin(&flank, args.minimizer_len, n)?;
+        let b = flank_bin(&flank, n)?;
         keys[b].push(arr.split_kmers[i]);
         counts[b].push(arr.variant_count[i]);
         variants[b]

@@ -1,6 +1,6 @@
 [package]
 name = "ska-minimizer-split"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Split (shard) and concatenate ska2 .skf files by minimizer value to bound ska merge memory"
 license = "MIT"
