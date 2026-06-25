@@ -2,7 +2,7 @@
 name = "ska-minimizer-split"
 version = "0.1.2"
 edition = "2021"
-description = "Split (shard) and concatenate ska2 .skf files by minimizer value to bound ska merge memory"
+description = "Split, subset, and concatenate ska2 .skf files by full-flank hash value"
 license = "MIT"
 repository = "https://github.com/timrozday/ska-minimizer-split"
 

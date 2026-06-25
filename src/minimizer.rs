@@ -25,7 +25,11 @@ const LETTER_CODE: [u8; 4] = [b'A', b'C', b'T', b'G'];
 pub fn decode_flank(key: u128, k: usize) -> Vec<u8> {
     let half_k = (k - 1) / 2;
     let shift = half_k * 2;
-    let lower_mask: u128 = if shift >= 128 { u128::MAX } else { (1u128 << shift) - 1 };
+    let lower_mask: u128 = if shift >= 128 {
+        u128::MAX
+    } else {
+        (1u128 << shift) - 1
+    };
 
     let decode_half = |mut bits: u128| -> Vec<u8> {
         let mut half = Vec::with_capacity(half_k);
@@ -48,11 +52,19 @@ pub fn decode_flank(key: u128, k: usize) -> Vec<u8> {
 /// windows) eliminates a length parameter and gives better hash entropy.
 pub fn flank_bin(flank: &[u8], n: usize) -> Result<usize> {
     ensure!(n >= 1, "number of bins must be >= 1");
+    let hash = flank_hash(flank)?;
+    Ok((hash % n as u64) as usize)
+}
+
+/// Hash a flank sequence with canonical ntHash over the full flank.
+///
+/// The returned hash is a `u64`, so range-based filtering uses the fixed domain
+/// `0..=u64::MAX` regardless of k-mer size.
+pub fn flank_hash(flank: &[u8]) -> Result<u64> {
     ensure!(!flank.is_empty(), "flank must be non-empty");
     let mut iter = NtHashIterator::new(flank, flank.len())
         .map_err(|e| anyhow::anyhow!("ntHash init failed: {e}"))?;
-    let hash = iter.next().expect("full-flank window always exists");
-    Ok((hash % n as u64) as usize)
+    Ok(iter.next().expect("full-flank window always exists"))
 }
 
 #[cfg(test)]
@@ -98,5 +110,11 @@ mod tests {
         let b = flank_bin(flank, n).unwrap();
         assert_eq!(a, b);
         assert!(a < n);
+    }
+
+    #[test]
+    fn hash_is_deterministic() {
+        let flank = b"ACGTACGTACGTACGGTCAGTCAGTCAGTC";
+        assert_eq!(flank_hash(flank).unwrap(), flank_hash(flank).unwrap());
     }
 }

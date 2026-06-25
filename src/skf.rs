@@ -90,9 +90,8 @@ struct KPeek {
 
 /// Read just the k-mer size from a `.skf`, to pick the integer width.
 pub fn peek_k(path: &Path) -> Result<usize> {
-    let reader = BufReader::new(
-        File::open(path).with_context(|| format!("opening {}", path.display()))?,
-    );
+    let reader =
+        BufReader::new(File::open(path).with_context(|| format!("opening {}", path.display()))?);
     let decompress = snap::read::FrameDecoder::new(reader);
     let header: KPeek = ciborium::de::from_reader(decompress)
         .with_context(|| format!("reading k from {}", path.display()))?;
