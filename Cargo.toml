@@ -1,6 +1,6 @@
 [package]
 name = "ska-minimizer-split"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Split, subset, and concatenate ska2 .skf files by full-flank hash value"
 license = "MIT"
